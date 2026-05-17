@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="default"/>
+<meta name="apple-mobile-web-app-title" content="Pipeline"/>
+<meta name="theme-color" content="#ffffff"/>
+<title>Sales Pipeline</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;background:#f8fafc;font-family:-apple-system,'SF Pro Display',BlinkMacSystemFont,'Helvetica Neue',sans-serif;overscroll-behavior:none;-webkit-font-smoothing:antialiased}
+  #root{height:100%}
+  input,select,textarea,button{font-family:inherit;font-size:16px}
+  ::-webkit-scrollbar{display:none}
+  textarea{resize:none}
+  input[type=date]{-webkit-appearance:none}
+  .scroll{overflow-y:auto;-webkit-overflow-scrolling:touch}
+  .leaflet-popup-content-wrapper{border-radius:14px!important;box-shadow:0 10px 30px rgba(0,0,0,0.15)!important;padding:4px}
+  .leaflet-popup-content{margin:10px 12px!important;font-family:inherit}
+  .leaflet-container{font-family:inherit}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+// PWA Manifest
+(function(){
+  var m=JSON.stringify({name:"Sales Pipeline",short_name:"Pipeline",display:"standalone",background_color:"#f8fafc",theme_color:"#ffffff",start_url:".",icons:[{src:"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%231d1d1f'/%3E%3Ctext y='72' x='50' text-anchor='middle' font-size='56' font-family='Apple Color Emoji,sans-serif'%3E🏠%3C/text%3E%3C/svg%3E",sizes:"any",type:"image/svg+xml",purpose:"any maskable"}]});
+  var l=document.createElement('link');
+  l.rel='manifest';l.href=URL.createObjectURL(new Blob([m],{type:'application/manifest+json'}));
+  document.head.appendChild(l);
+  var i=document.createElement('link');
+  i.rel='apple-touch-icon';
+  i.href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' rx='40' fill='%231d1d1f'/%3E%3Ctext y='128' x='90' text-anchor='middle' font-size='100' font-family='Apple Color Emoji,sans-serif'%3E🏠%3C/text%3E%3C/svg%3E";
+  document.head.appendChild(i);
+})();
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js" crossorigin></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef } = React;
+
+// ── Status Config ────────────────────────────────────────────────────────────
+const STATUS = {
+  prospect_active:  { label:"Prospect (Active)",    emoji:"🟡", short:"Active",    intervalDays:3,  urgency:3, pill:{bg:"#fef3c7",text:"#92400e",border:"#fcd34d"}, bar:"#f59e0b", goal:"Insurance claim status? Set the next milestone — adjuster visit, claim submission, or contract." },
+  prospect_stalled: { label:"Prospect (Stalled)",   emoji:"🔴", short:"Stalled",   intervalDays:3,  urgency:5, pill:{bg:"#fee2e2",text:"#991b1b",border:"#fca5a5"}, bar:"#ef4444", goal:"Force a decision — YES or close the file. Find the real objection and overcome it or move on." },
+  invoiced_overdue: { label:"Invoiced (Overdue)",   emoji:"⚠️", short:"Invoiced",  intervalDays:3,  urgency:6, pill:{bg:"#ffedd5",text:"#9a3412",border:"#fdba74"}, bar:"#f97316", goal:"Payment or payment plan TODAY. Critically overdue — escalate if no response." },
+  approved:         { label:"Approved / In Progress",emoji:"✅", short:"Approved",  intervalDays:7,  urgency:2, pill:{bg:"#dcfce7",text:"#14532d",border:"#86efac"}, bar:"#22c55e", goal:"Check in on job progress. Any questions or concerns from the homeowner?" },
+  completed:        { label:"Completed / Paid",     emoji:"🏁", short:"Paid",      intervalDays:null,urgency:1, pill:{bg:"#f3f4f6",text:"#374151",border:"#d1d5db"}, bar:"#9ca3af", goal:null },
+};
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const todayStr = () => new Date().toISOString().split("T")[0];
+const diffDays = (from, to=todayStr()) => !from ? null : Math.round((new Date(to+"T00:00:00")-new Date(from+"T00:00:00"))/86400000);
+const addDays  = (s,n) => { const d=new Date(s+"T00:00:00"); d.setDate(d.getDate()+n); return d.toISOString().split("T")[0]; };
+const fmtDate  = s => s ? new Date(s+"T00:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "—";
+const fmtPhone = s => { if(!s) return "—"; const d=s.replace(/\D/g,""); return d.length===10?`(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`:s; };
+const fmtMoney = n => `$${Number(n||0).toLocaleString()}`;
+const newId    = () => Math.random().toString(36).slice(2)+Date.now().toString(36);
+const getNextCall = c => { const i=c.intervalOverride??STATUS[c.status]?.intervalDays; if(!i) return null; return addDays(c.lastCallDate||c.statusSince||c.createdAt||todayStr(),i); };
+const isOverdue   = c => { if(c.status==="completed") return false; const n=getNextCall(c); return !!n&&n<=todayStr(); };
+const emptyForm   = () => ({name:"",phone:"",address:"",jobTotal:"",acculynxUrl:"",status:"prospect_active",statusSince:todayStr(),lastCallDate:"",intervalOverride:"",notes:[],createdAt:todayStr()});
+const DEF_PAY = {commissionRate:10,drawAmount:1000,drawStartDate:todayStr()};
+
+// ── localStorage helpers ─────────────────────────────────────────────────────
+const lsGet = key => { try{ const v=localStorage.getItem(key); return v?JSON.parse(v):null; }catch{ return null; } };
+const lsSet = (key,val) => { try{ localStorage.setItem(key,JSON.stringify(val)); }catch{} };
+
+// ── CSV Export ───────────────────────────────────────────────────────────────
+const exportCSV = cs => {
+  const h=["Name","Phone","Address","Job Total","Status","Status Since","Last Call","Next Call","AccuLynx URL"];
+  const r=cs.map(c=>[c.name,c.phone,c.address,c.jobTotal||"",STATUS[c.status]?.label,c.statusSince,c.lastCallDate,getNextCall(c)||"",c.acculynxUrl]);
+  const csv=[h,...r].map(row=>row.map(v=>`"${(v||"").toString().replace(/"/g,'""')}"`).join(",")).join("\n");
+  const a=Object.assign(document.createElement("a"),{href:URL.createObjectURL(new Blob([csv],{type:"text/csv"})),download:`pipeline-${todayStr()}.csv`});
+  a.click();
+};
+
+// ── Pay chart data ───────────────────────────────────────────────────────────
+const buildPayChart = (cs, pay) => {
+  const {commissionRate,drawAmount,drawStartDate} = pay;
+  if(!drawStartDate||!drawAmount||!commissionRate) return [];
+  const days=diffDays(drawStartDate)||0;
+  const n=Math.max(2,Math.ceil(days/14))+3;
+  const rate=Number(commissionRate)/100, draw=Number(drawAmount);
+  return Array.from({length:n},(_,i)=>{
+    const periodEnd=addDays(drawStartDate,(i+1)*14);
+    const cumDraw=(i+1)*draw;
+    const cumEarned=cs.filter(c=>c.status==="completed"&&c.statusSince&&c.statusSince<=periodEnd).reduce((s,c)=>s+Number(c.jobTotal||0),0)*rate;
+    return {period:`Wk ${(i+1)*2}`,date:periodEnd,draw:Math.round(cumDraw),earned:Math.round(cumEarned)};
+  });
+};
+
+// ── Pay Chart (SVG — no external deps) ──────────────────────────────────────
+function PayChart({ data }) {
+  const [hov, setHov] = useState(null);
+  if(!data||data.length<2) return <div style={{textAlign:"center",padding:"40px 0",color:"#94a3b8",fontSize:14}}>Set your draw start date to see the chart</div>;
+  const W=500,H=210,P={t:10,r:20,b:32,l:52};
+  const iW=W-P.l-P.r, iH=H-P.t-P.b;
+  const maxV=Math.max(...data.flatMap(d=>[d.draw,d.earned]),100)*1.15;
+  const xS=i=>P.l+(i/(data.length-1))*iW;
+  const yS=v=>P.t+iH-(v/maxV)*iH;
+  const pts=k=>data.map((d,i)=>`${i===0?"M":"L"}${xS(i).toFixed(1)},${yS(d[k]).toFixed(1)}`).join(" ");
+  const fill=k=>`${pts(k)} L${xS(data.length-1).toFixed(1)},${(P.t+iH).toFixed(1)} L${xS(0).toFixed(1)},${(P.t+iH).toFixed(1)} Z`;
+  const yTicks=[0,.25,.5,.75,1].map(t=>({v:maxV*t,y:yS(maxV*t)}));
+  const step=Math.ceil(data.length/5);
+  return (
+    <div style={{position:"relative"}}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:"auto",display:"block"}}>
+        <defs>
+          <linearGradient id="dg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#3b82f6" stopOpacity=".12"/><stop offset="100%" stopColor="#3b82f6" stopOpacity="0"/></linearGradient>
+          <linearGradient id="eg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#22c55e" stopOpacity=".18"/><stop offset="100%" stopColor="#22c55e" stopOpacity="0"/></linearGradient>
+        </defs>
+        {yTicks.map(({v,y})=>(
+          <g key={v}>
+            <line x1={P.l} x2={W-P.r} y1={y} y2={y} stroke="#f1f5f9" strokeWidth="1"/>
+            <text x={P.l-6} y={y+4} textAnchor="end" fontSize="10" fill="#94a3b8">{v>=1000?`$${(v/1000).toFixed(0)}k`:`$${Math.round(v)}`}</text>
+          </g>
+        ))}
+        <path d={fill("draw")} fill="url(#dg)"/>
+        <path d={fill("earned")} fill="url(#eg)"/>
+        <path d={pts("draw")} stroke="#3b82f6" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+        <path d={pts("earned")} stroke="#22c55e" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+        {data.map((d,i)=>(i%step===0||i===data.length-1)&&<text key={i} x={xS(i)} y={H-6} textAnchor="middle" fontSize="9" fill="#94a3b8">{d.period}</text>)}
+        {data.map((d,i)=>(
+          <rect key={i} x={xS(i)-14} y={P.t} width="28" height={iH} fill="transparent"
+            onMouseEnter={()=>setHov({...d,xi:xS(i),yi:{draw:yS(d.draw),earned:yS(d.earned)}})}
+            onMouseLeave={()=>setHov(null)}
+          />
+        ))}
+        {hov&&<>
+          <line x1={hov.xi} x2={hov.xi} y1={P.t} y2={P.t+iH} stroke="#e2e8f0" strokeWidth="1" strokeDasharray="4 4"/>
+          <circle cx={hov.xi} cy={hov.yi.draw} r="4" fill="#3b82f6"/>
+          <circle cx={hov.xi} cy={hov.yi.earned} r="4" fill="#22c55e"/>
+        </>}
+      </svg>
+      <div style={{display:"flex",gap:16,justifyContent:"center",marginTop:6,fontSize:12}}>
+        <span style={{color:"#3b82f6",fontWeight:600}}>● Draw</span>
+        <span style={{color:"#22c55e",fontWeight:600}}>● Earned</span>
+      </div>
+      {hov&&(
+        <div style={{position:"absolute",top:8,right:8,background:"#1e293b",borderRadius:10,padding:"10px 14px",pointerEvents:"none",zIndex:10}}>
+          <div style={{color:"#94a3b8",fontSize:11,marginBottom:4}}>{hov.period}</div>
+          <div style={{color:"#60a5fa",fontSize:12,fontWeight:600}}>Draw: {fmtMoney(hov.draw)}</div>
+          <div style={{color:"#4ade80",fontSize:12,fontWeight:600}}>Earned: {fmtMoney(hov.earned)}</div>
+          <div style={{color:hov.earned>=hov.draw?"#4ade80":"#f87171",fontSize:12,fontWeight:700,marginTop:4,paddingTop:4,borderTop:"1px solid #334155"}}>Net: {hov.earned>=hov.draw?"+":""}{fmtMoney(hov.earned-hov.draw)}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Shared UI ────────────────────────────────────────────────────────────────
+function Pill({status}) {
+  const s=STATUS[status]; if(!s) return null;
+  return <span style={{background:s.pill.bg,color:s.pill.text,border:`1px solid ${s.pill.border}`,fontSize:11,fontWeight:600,padding:"3px 9px",borderRadius:99,display:"inline-flex",alignItems:"center",gap:4,whiteSpace:"nowrap"}}>{s.emoji} {s.short}</span>;
+}
+
+function Inp({label,hint,...p}) {
+  return (
+    <div>
+      {label&&<label style={{display:"block",fontSize:11,fontWeight:700,color:"#6b7280",marginBottom:4,textTransform:"uppercase",letterSpacing:"0.05em"}}>{label}{hint&&<span style={{fontWeight:400,textTransform:"none",color:"#9ca3af",marginLeft:4}}>{hint}</span>}</label>}
+      <input {...p} style={{width:"100%",border:"1.5px solid #e5e7eb",borderRadius:12,padding:"11px 13px",fontSize:16,color:"#111827",background:"#fff",outline:"none",boxSizing:"border-box",...p.style}}/>
+    </div>
+  );
+}
+
+function Btn({children,variant="primary",small,style:s,...p}) {
+  const v={primary:{background:"#1d1d1f",color:"#fff",border:"none"},secondary:{background:"#fff",color:"#374151",border:"1.5px solid #e5e7eb"},ghost:{background:"transparent",color:"#6b7280",border:"none"},blue:{background:"#2563eb",color:"#fff",border:"none"}};
+  return <button {...p} style={{...v[variant],borderRadius:12,padding:small?"7px 14px":"11px 18px",fontSize:small?13:15,fontWeight:600,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6,whiteSpace:"nowrap",...s}}>{children}</button>;
+}
+
+function SCard({label,value,sub,bg="#f8fafc",color="#0f172a",border="#e8ecf0"}) {
+  return <div style={{background:bg,border:`1.5px solid ${border}`,borderRadius:16,padding:"16px"}}>
+    <div style={{fontSize:22,fontWeight:900,color,lineHeight:1}}>{value}</div>
+    <div style={{fontSize:11,fontWeight:700,color,opacity:.7,marginTop:4,textTransform:"uppercase",letterSpacing:"0.05em"}}>{label}</div>
+    {sub&&<div style={{fontSize:11,color:"#94a3b8",marginTop:3}}>{sub}</div>}
+  </div>;
+}
+
+// ── Confirm Modal ────────────────────────────────────────────────────────────
+function ConfirmModal({message,onConfirm,onCancel}) {
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:"0 0 env(safe-area-inset-bottom)"}}>
+      <div style={{background:"#fff",borderRadius:"20px 20px 0 0",width:"100%",maxWidth:480,padding:24}}>
+        <div style={{fontSize:16,fontWeight:600,color:"#0f172a",marginBottom:8,textAlign:"center"}}>{message}</div>
+        <div style={{display:"flex",gap:10,marginTop:20}}>
+          <button onClick={onCancel} style={{flex:1,background:"#f1f5f9",border:"none",borderRadius:12,padding:"14px",fontSize:16,fontWeight:600,color:"#374151",cursor:"pointer"}}>Cancel</button>
+          <button onClick={onConfirm} style={{flex:1,background:"#ef4444",border:"none",borderRadius:12,padding:"14px",fontSize:16,fontWeight:600,color:"#fff",cursor:"pointer"}}>Delete</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Customer Card ────────────────────────────────────────────────────────────
+function CustomerCard({c,onSelect,onLogCall}) {
+  const s=STATUS[c.status]; const next=getNextCall(c); const due=isOverdue(c);
+  return (
+    <div onClick={()=>onSelect(c)} style={{background:"#fff",border:`1.5px solid ${due?"#fca5a5":"#f1f5f9"}`,borderLeft:`5px solid ${due?"#ef4444":s.bar}`,borderRadius:16,padding:"14px 16px",cursor:"pointer",marginBottom:10,boxShadow:due?"0 0 0 2px rgba(239,68,68,0.1)":"0 1px 4px rgba(0,0,0,0.05)"}}>
+      <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:10,marginBottom:8}}>
+        <div style={{minWidth:0}}><div style={{fontWeight:700,fontSize:16,color:"#0f172a"}}>{c.name}</div><div style={{fontSize:13,color:"#94a3b8",marginTop:2}}>{fmtPhone(c.phone)}</div></div>
+        <Pill status={c.status}/>
+      </div>
+      <div style={{display:"flex",flexWrap:"wrap",gap:10,fontSize:12,color:"#64748b",marginBottom:10}}>
+        {diffDays(c.statusSince)!==null&&<span>📅 {diffDays(c.statusSince)}d in status</span>}
+        {c.lastCallDate?<span>📞 {diffDays(c.lastCallDate)}d ago</span>:<span>📞 Never called</span>}
+        {c.jobTotal?<span>💰 {fmtMoney(c.jobTotal)}</span>:null}
+      </div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div style={{fontSize:12,fontWeight:600,color:due?"#dc2626":"#64748b"}}>
+          {c.status==="completed"?"✅ Complete":next?(due?`🔥 Overdue since ${fmtDate(next)}`:`Next: ${fmtDate(next)}`):"—"}
+        </div>
+        {c.status!=="completed"&&<button onClick={e=>{e.stopPropagation();onLogCall(c);}} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:10,padding:"7px 14px",fontSize:13,fontWeight:600,cursor:"pointer"}}>Log Call</button>}
+      </div>
+    </div>
+  );
+}
+
+// ── Detail Sheet (slide-up on mobile) ────────────────────────────────────────
+function DetailSheet({c,onEdit,onLogCall,onAddNote,onStatusChange,onClose,onDelete}) {
+  const [note,setNote]=useState("");
+  const [showConfirm,setShowConfirm]=useState(false);
+  const s=STATUS[c.status]; const next=getNextCall(c); const due=isOverdue(c); const interval=c.intervalOverride??s.intervalDays;
+  const submit=()=>{if(!note.trim())return;onAddNote(c.id,note.trim());setNote("");};
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:100,display:"flex",alignItems:"flex-end"}} onClick={onClose}>
+      {showConfirm&&<ConfirmModal message={`Delete ${c.name}? This cannot be undone.`} onConfirm={()=>onDelete(c.id)} onCancel={()=>setShowConfirm(false)}/>}
+      <div onClick={e=>e.stopPropagation()} style={{background:"#f8fafc",borderRadius:"24px 24px 0 0",width:"100%",maxHeight:"88vh",display:"flex",flexDirection:"column",paddingBottom:"env(safe-area-inset-bottom)"}}>
+        {/* Handle */}
+        <div style={{display:"flex",justifyContent:"center",paddingTop:10,paddingBottom:4}}><div style={{width:40,height:4,background:"#d1d5db",borderRadius:99}}/></div>
+        <div style={{overflowY:"auto",flex:1,padding:"0 18px 20px"}}>
+          {/* Header */}
+          <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:14,marginTop:8}}>
+            <div><h2 style={{fontSize:20,fontWeight:800,color:"#0f172a",marginBottom:6}}>{c.name}</h2><Pill status={c.status}/></div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>onEdit(c)} style={{background:"#f1f5f9",border:"none",borderRadius:10,padding:"8px 14px",fontSize:14,fontWeight:600,color:"#374151",cursor:"pointer"}}>Edit</button>
+            </div>
+          </div>
+
+          {/* Status change */}
+          <div style={{marginBottom:16}}>
+            <div style={{fontSize:11,fontWeight:700,color:"#6b7280",marginBottom:8,textTransform:"uppercase",letterSpacing:"0.05em"}}>Change Status</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+              {Object.entries(STATUS).map(([k,v])=>(
+                <button key={k} onClick={()=>onStatusChange(c.id,k)} style={{background:c.status===k?v.pill.bg:"#fff",color:c.status===k?v.pill.text:"#64748b",border:c.status===k?`1.5px solid ${v.pill.border}`:"1.5px solid #e5e7eb",borderRadius:10,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer"}}>{v.emoji} {v.short}</button>
+              ))}
+            </div>
+          </div>
+
+          {/* Info grid */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+            {[["📞 Phone",fmtPhone(c.phone)],["💰 Job Total",c.jobTotal?fmtMoney(c.jobTotal):"—"],["📅 In Status",`${fmtDate(c.statusSince)} (${diffDays(c.statusSince)}d)`],["📞 Last Call",c.lastCallDate?`${fmtDate(c.lastCallDate)} · ${diffDays(c.lastCallDate)}d ago`:"Never"]].map(([lbl,val])=>(
+              <div key={lbl} style={{background:"#fff",borderRadius:12,padding:"11px 13px",border:"1px solid #f1f5f9"}}>
+                <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",marginBottom:2,textTransform:"uppercase",letterSpacing:"0.05em"}}>{lbl}</div>
+                <div style={{fontSize:13,fontWeight:600,color:"#1e293b"}}>{val}</div>
+              </div>
+            ))}
+            {c.address&&<div style={{background:"#fff",borderRadius:12,padding:"11px 13px",gridColumn:"1/-1",border:"1px solid #f1f5f9"}}>
+              <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",marginBottom:2,textTransform:"uppercase",letterSpacing:"0.05em"}}>📍 Address</div>
+              <div style={{fontSize:13,fontWeight:600,color:"#1e293b"}}>{c.address}</div>
+            </div>}
+          </div>
+
+          {/* Next call */}
+          {c.status!=="completed"&&(
+            <div style={{background:due?"#fff1f2":"#eff6ff",border:`1.5px solid ${due?"#fca5a5":"#bfdbfe"}`,borderRadius:14,padding:"14px",marginBottom:14}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:11,fontWeight:700,color:due?"#dc2626":"#2563eb",marginBottom:2}}>{due?"🔥 Call Overdue":"📅 Next Scheduled Call"}</div>
+                  <div style={{fontSize:16,fontWeight:800,color:due?"#991b1b":"#1d4ed8",marginBottom:3}}>{fmtDate(next)}</div>
+                  <div style={{fontSize:11,color:"#64748b"}}>Every {interval} days · {s.goal}</div>
+                </div>
+                <button onClick={()=>onLogCall(c)} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:11,padding:"10px 16px",fontSize:14,fontWeight:700,cursor:"pointer",marginLeft:10,whiteSpace:"nowrap"}}>Log Call</button>
+              </div>
+            </div>
+          )}
+
+          {c.acculynxUrl&&<a href={c.acculynxUrl} target="_blank" rel="noreferrer" style={{display:"block",fontSize:14,color:"#2563eb",marginBottom:14,fontWeight:600,textDecoration:"none"}}>🔗 Open in AccuLynx →</a>}
+
+          {/* Add note */}
+          <div style={{marginBottom:16}}>
+            <div style={{fontSize:13,fontWeight:700,color:"#374151",marginBottom:8}}>Add Note</div>
+            <div style={{display:"flex",gap:8}}>
+              <input value={note} onChange={e=>setNote(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Type a note..." style={{flex:1,border:"1.5px solid #e5e7eb",borderRadius:12,padding:"10px 13px",fontSize:16,color:"#111827",outline:"none"}}/>
+              <button onClick={submit} style={{background:"#1d1d1f",color:"#fff",border:"none",borderRadius:12,padding:"10px 16px",fontSize:14,fontWeight:700,cursor:"pointer"}}>Add</button>
+            </div>
+          </div>
+
+          {/* Activity */}
+          {c.notes?.length>0&&(
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:13,fontWeight:700,color:"#374151",marginBottom:8}}>Activity</div>
+              {c.notes.map((n,i)=>(
+                <div key={i} style={{display:"flex",gap:10,fontSize:13,marginBottom:8,paddingBottom:8,borderBottom:i<c.notes.length-1?"1px solid #f1f5f9":"none"}}>
+                  <div style={{color:"#94a3b8",whiteSpace:"nowrap",fontWeight:500,minWidth:80}}>{fmtDate(n.date)}</div>
+                  <div style={{color:n.type==="call"?"#1d4ed8":"#374151",lineHeight:1.4}}>{n.text}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button onClick={()=>setShowConfirm(true)} style={{background:"none",border:"none",fontSize:14,color:"#ef4444",cursor:"pointer",fontWeight:600,padding:"4px 0"}}>Delete Customer</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Form Modal ────────────────────────────────────────────────────────────────
+function FormModal({mode,form,onChange,onSave,onClose}) {
+  const opts=Object.entries(STATUS).map(([k,v])=>({value:k,label:`${v.emoji} ${v.label}`}));
+  const valid=form.name.trim().length>0;
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:110,display:"flex",alignItems:"flex-end"}}>
+      <div style={{background:"#fff",borderRadius:"24px 24px 0 0",width:"100%",maxHeight:"92vh",display:"flex",flexDirection:"column",paddingBottom:"env(safe-area-inset-bottom)"}}>
+        <div style={{padding:"18px 20px 0",display:"flex",justifyContent:"center"}}><div style={{width:40,height:4,background:"#d1d5db",borderRadius:99,marginBottom:14}}/></div>
+        <div style={{padding:"0 20px 10px",display:"flex",alignItems:"center",justifyContent:"space-between",borderBottom:"1px solid #f1f5f9"}}>
+          <h2 style={{fontSize:18,fontWeight:800,color:"#0f172a"}}>{mode==="add"?"Add Customer":"Edit Customer"}</h2>
+          <button onClick={onClose} style={{background:"#f1f5f9",border:"none",borderRadius:99,width:32,height:32,fontSize:18,cursor:"pointer",color:"#6b7280",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+        </div>
+        <div style={{overflowY:"auto",flex:1,padding:"18px 20px",display:"flex",flexDirection:"column",gap:14}}>
+          <Inp label="Customer Name" value={form.name} onChange={e=>onChange("name",e.target.value)} placeholder="John Smith"/>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <Inp label="Phone" value={form.phone} onChange={e=>onChange("phone",e.target.value)} placeholder="(479) 555-0100"/>
+            <Inp label="Job Total ($)" type="number" value={form.jobTotal} onChange={e=>onChange("jobTotal",e.target.value)} placeholder="0"/>
+          </div>
+          <Inp label="Address" value={form.address} onChange={e=>onChange("address",e.target.value)} placeholder="123 Main St, Fort Smith, AR"/>
+          <div>
+            <label style={{display:"block",fontSize:11,fontWeight:700,color:"#6b7280",marginBottom:4,textTransform:"uppercase",letterSpacing:"0.05em"}}>Status</label>
+            <select value={form.status} onChange={e=>onChange("status",e.target.value)} style={{width:"100%",border:"1.5px solid #e5e7eb",borderRadius:12,padding:"11px 13px",fontSize:16,color:"#111827",background:"#fff",outline:"none"}}>
+              {opts.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <Inp label="In Status Since" type="date" value={form.statusSince} onChange={e=>onChange("statusSince",e.target.value)}/>
+            <Inp label="Last Call Date" type="date" value={form.lastCallDate} onChange={e=>onChange("lastCallDate",e.target.value)}/>
+          </div>
+          <Inp label="Call Interval (days)" hint={`default: ${STATUS[form.status]?.intervalDays??"—"}`} type="number" min="1" value={form.intervalOverride} onChange={e=>onChange("intervalOverride",e.target.value)} placeholder="Leave blank for default"/>
+          <Inp label="AccuLynx URL" value={form.acculynxUrl} onChange={e=>onChange("acculynxUrl",e.target.value)} placeholder="https://my.acculynx.com/jobs/..."/>
+        </div>
+        <div style={{padding:"14px 20px",borderTop:"1px solid #f1f5f9",display:"flex",gap:10}}>
+          <button onClick={onClose} style={{flex:1,background:"#f1f5f9",border:"none",borderRadius:14,padding:"16px",fontSize:16,fontWeight:600,color:"#374151",cursor:"pointer"}}>Cancel</button>
+          <button onClick={onSave} disabled={!valid} style={{flex:2,background:"#1d1d1f",border:"none",borderRadius:14,padding:"16px",fontSize:16,fontWeight:700,color:"#fff",cursor:"pointer",opacity:valid?1:0.4}}>{mode==="add"?"Add Customer":"Save Changes"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Log Call Modal ────────────────────────────────────────────────────────────
+function LogCallModal({customerName,data,onChange,onSave,onClose}) {
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:110,display:"flex",alignItems:"flex-end"}}>
+      <div style={{background:"#fff",borderRadius:"24px 24px 0 0",width:"100%",paddingBottom:"env(safe-area-inset-bottom)"}}>
+        <div style={{padding:"18px 20px 0",display:"flex",justifyContent:"center"}}><div style={{width:40,height:4,background:"#d1d5db",borderRadius:99,marginBottom:14}}/></div>
+        <div style={{padding:"0 20px 14px",borderBottom:"1px solid #f1f5f9"}}>
+          <div style={{fontSize:18,fontWeight:800,color:"#0f172a"}}>Log Call</div>
+          <div style={{fontSize:14,color:"#64748b",marginTop:2}}>{customerName}</div>
+        </div>
+        <div style={{padding:"18px 20px",display:"flex",flexDirection:"column",gap:14}}>
+          <Inp label="Call Date" type="date" value={data.date} onChange={e=>onChange("date",e.target.value)}/>
+          <div>
+            <label style={{display:"block",fontSize:11,fontWeight:700,color:"#6b7280",marginBottom:4,textTransform:"uppercase",letterSpacing:"0.05em"}}>Notes</label>
+            <textarea value={data.note} onChange={e=>onChange("note",e.target.value)} placeholder="What happened? Commitments, next steps, objections?" style={{width:"100%",border:"1.5px solid #e5e7eb",borderRadius:12,padding:"11px 13px",fontSize:16,color:"#111827",outline:"none",boxSizing:"border-box"}} rows={3}/>
+          </div>
+        </div>
+        <div style={{padding:"0 20px 20px",display:"flex",gap:10}}>
+          <button onClick={onClose} style={{flex:1,background:"#f1f5f9",border:"none",borderRadius:14,padding:"16px",fontSize:16,fontWeight:600,color:"#374151",cursor:"pointer"}}>Cancel</button>
+          <button onClick={onSave} style={{flex:2,background:"#2563eb",border:"none",borderRadius:14,padding:"16px",fontSize:16,fontWeight:700,color:"#fff",cursor:"pointer"}}>📞 Log Call</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Sync Modal ────────────────────────────────────────────────────────────────
+function SyncModal({customers,onClose}) {
+  const [copied,setCopied]=useState(false);
+  const active=[...customers].filter(c=>c.status!=="completed"&&getNextCall(c)).sort((a,b)=>(getNextCall(a)||"").localeCompare(getNextCall(b)||""));
+  const text=active.length===0?"No active customers to schedule.":
+    `PIPELINE CALL SCHEDULE — ${new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}\n\n`+
+    active.map(c=>{const s=STATUS[c.status];const i=c.intervalOverride??s.intervalDays;return[`${s.emoji} ${c.name}`,`  Status: ${s.label} | Since: ${fmtDate(c.statusSince)} (${diffDays(c.statusSince)} days)`,`  Phone: ${fmtPhone(c.phone)||"N/A"} | Address: ${c.address||"N/A"}`,c.jobTotal?`  Job Total: ${fmtMoney(c.jobTotal)}`:null,`  Last Call: ${c.lastCallDate?fmtDate(c.lastCallDate):"Never"}`,`  Next Call: ${fmtDate(getNextCall(c))} | Every ${i} days`,`  Goal: ${s.goal||"Check in"}`,c.acculynxUrl?`  AccuLynx: ${c.acculynxUrl}`:null].filter(Boolean).join("\n");}).join("\n\n");
+  const copy=()=>{ navigator.clipboard.writeText(text).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2500);}); };
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:110,display:"flex",alignItems:"flex-end"}}>
+      <div style={{background:"#fff",borderRadius:"24px 24px 0 0",width:"100%",maxHeight:"85vh",display:"flex",flexDirection:"column",paddingBottom:"env(safe-area-inset-bottom)"}}>
+        <div style={{padding:"18px 20px 0",display:"flex",justifyContent:"center"}}><div style={{width:40,height:4,background:"#d1d5db",borderRadius:99,marginBottom:10}}/></div>
+        <div style={{padding:"0 20px 14px",borderBottom:"1px solid #f1f5f9"}}>
+          <div style={{fontSize:18,fontWeight:800,color:"#0f172a"}}>📅 Sync to Calendar</div>
+          <div style={{fontSize:13,color:"#64748b",marginTop:2}}>Copy this and send it to Claude to schedule all calls.</div>
+        </div>
+        <div style={{flex:1,overflow:"auto",padding:"14px 20px"}}>
+          <pre style={{background:"#0f172a",color:"#e2e8f0",borderRadius:14,padding:"14px",fontSize:11,lineHeight:1.7,whiteSpace:"pre-wrap",fontFamily:"ui-monospace,monospace"}}>{text}</pre>
+        </div>
+        <div style={{padding:"14px 20px",display:"flex",gap:10}}>
+          <button onClick={onClose} style={{flex:1,background:"#f1f5f9",border:"none",borderRadius:14,padding:"16px",fontSize:16,fontWeight:600,color:"#374151",cursor:"pointer"}}>Close</button>
+          <button onClick={copy} style={{flex:2,background:"#1d1d1f",border:"none",borderRadius:14,padding:"16px",fontSize:16,fontWeight:700,color:"#fff",cursor:"pointer"}}>{copied?"✅ Copied!":"Copy to Clipboard"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Dashboard Tab ─────────────────────────────────────────────────────────────
+function DashboardTab({customers}) {
+  const weekAgo=addDays(todayStr(),-7);
+  const monthStart=todayStr().slice(0,7)+"-01";
+  const allNotes=customers.flatMap(c=>(c.notes||[]).map(n=>({...n,cName:c.name})));
+  const callsWk=allNotes.filter(n=>n.type==="call"&&n.date>=weekAgo).length;
+  const newLeads=customers.filter(c=>c.createdAt>=weekAgo).length;
+  const paidMo=customers.filter(c=>c.status==="completed"&&c.statusSince>=monthStart).reduce((s,c)=>s+Number(c.jobTotal||0),0);
+  const pipeline=customers.filter(c=>c.status!=="completed").reduce((s,c)=>s+Number(c.jobTotal||0),0);
+  const due=customers.filter(isOverdue).length;
+  const recent=[...allNotes].filter(n=>n.type==="call").sort((a,b)=>b.date.localeCompare(a.date)).slice(0,6);
+  const byStatus=Object.entries(STATUS).map(([k,cfg])=>{const items=customers.filter(c=>c.status===k);return{k,cfg,count:items.length,val:items.reduce((s,c)=>s+Number(c.jobTotal||0),0)};}).filter(x=>x.count>0);
+  const maxV=Math.max(...byStatus.map(x=>x.val),1);
+  return (
+    <div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+        <SCard label="Calls This Week" value={callsWk} bg="#eff6ff" color="#1d4ed8" border="#bfdbfe" sub="Last 7 days"/>
+        <SCard label="New Leads" value={newLeads} bg="#fffbeb" color="#d97706" border="#fcd34d" sub="Last 7 days"/>
+        <SCard label="Paid This Month" value={fmtMoney(paidMo)} bg="#f0fdf4" color="#16a34a" border="#86efac" sub="Completed"/>
+        <SCard label="Active Pipeline" value={fmtMoney(pipeline)} bg="#f8fafc" color="#0f172a" border="#e2e8f0" sub="Open jobs"/>
+      </div>
+      {due>0&&<div style={{background:"#fff1f2",border:"1.5px solid #fca5a5",borderRadius:14,padding:"14px",marginBottom:16,display:"flex",alignItems:"center",gap:12}}><span style={{fontSize:22}}>🔥</span><div><div style={{fontWeight:700,color:"#991b1b",fontSize:15}}>{due} call{due!==1?"s":""} overdue right now</div><div style={{fontSize:12,color:"#dc2626",marginTop:2}}>Go to Pipeline to log them</div></div></div>}
+      <div style={{background:"#fff",borderRadius:16,border:"1.5px solid #e8ecf0",padding:18,marginBottom:16}}>
+        <div style={{fontWeight:800,fontSize:15,color:"#0f172a",marginBottom:14}}>Pipeline Breakdown</div>
+        {byStatus.length===0?<div style={{color:"#94a3b8",fontSize:13}}>No customers yet</div>:byStatus.map(({k,cfg,count,val})=>(
+          <div key={k} style={{marginBottom:12}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4,fontSize:13}}>
+              <span style={{fontWeight:600,color:"#374151"}}>{cfg.emoji} {cfg.label}</span>
+              <span style={{color:"#94a3b8",fontSize:12}}>{count} · {val?fmtMoney(val):"no value"}</span>
+            </div>
+            <div style={{background:"#f1f5f9",borderRadius:99,height:8,overflow:"hidden"}}>
+              <div style={{background:cfg.bar,borderRadius:99,height:"100%",width:`${Math.max(4,(val/maxV)*100)}%`}}/>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{background:"#fff",borderRadius:16,border:"1.5px solid #e8ecf0",padding:18}}>
+        <div style={{fontWeight:800,fontSize:15,color:"#0f172a",marginBottom:14}}>Recent Call Activity</div>
+        {recent.length===0?<div style={{color:"#94a3b8",fontSize:13}}>No calls logged yet</div>:recent.map((n,i)=>(
+          <div key={i} style={{display:"flex",gap:10,marginBottom:10,paddingBottom:10,borderBottom:i<recent.length-1?"1px solid #f1f5f9":"none"}}>
+            <span style={{fontSize:16,flexShrink:0}}>📞</span>
+            <div style={{minWidth:0}}>
+              <div style={{fontSize:14,fontWeight:600,color:"#0f172a"}}>{n.cName}</div>
+              <div style={{fontSize:12,color:"#94a3b8"}}>{fmtDate(n.date)} · {n.text.replace("📞 ","").slice(0,50)}{n.text.length>53?"…":""}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Pay Tracker Tab ───────────────────────────────────────────────────────────
+function PayTrackerTab({customers,pay,onPayChange}) {
+  const rate=Number(pay.commissionRate)/100, drawAmt=Number(pay.drawAmount);
+  const paid=customers.filter(c=>c.status==="completed"&&c.jobTotal);
+  const earned=paid.reduce((s,c)=>s+Number(c.jobTotal),0)*rate;
+  const periods=Math.max(0,Math.floor((diffDays(pay.drawStartDate)||0)/14));
+  const drawn=periods*drawAmt;
+  const net=earned-drawn;
+  const ahead=net>=0;
+  const pipe=customers.filter(c=>c.status!=="completed"&&c.jobTotal);
+  const projE=pipe.reduce((s,c)=>s+Number(c.jobTotal),0)*rate;
+  const projN=net+projE;
+  const chart=buildPayChart(customers,pay);
+  const bkIdx=chart.findIndex(d=>d.earned>=d.draw&&d.earned>0);
+  return (
+    <div>
+      <div style={{background:"#fff",borderRadius:16,border:"1.5px solid #e8ecf0",padding:18,marginBottom:16}}>
+        <div style={{fontWeight:800,fontSize:15,color:"#0f172a",marginBottom:14}}>⚙️ Pay Settings</div>
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <Inp label="Commission (%)" type="number" min="0" max="100" step="0.5" value={pay.commissionRate} onChange={e=>onPayChange("commissionRate",e.target.value)} placeholder="10"/>
+            <Inp label="Bi-Weekly Draw ($)" type="number" min="0" value={pay.drawAmount} onChange={e=>onPayChange("drawAmount",e.target.value)} placeholder="1000"/>
+          </div>
+          <Inp label="Draw Start Date" type="date" value={pay.drawStartDate} onChange={e=>onPayChange("drawStartDate",e.target.value)}/>
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+        <SCard label="Total Earned" value={fmtMoney(earned)} bg="#f0fdf4" color="#16a34a" border="#86efac" sub={`${paid.length} paid job${paid.length!==1?"s":""}`}/>
+        <SCard label="Total Drawn" value={fmtMoney(drawn)} bg="#f8fafc" color="#475569" border="#e2e8f0" sub={`${periods} pay period${periods!==1?"s":""}`}/>
+        <div style={{background:ahead?"#f0fdf4":"#fff1f2",border:`1.5px solid ${ahead?"#86efac":"#fca5a5"}`,borderRadius:16,padding:16}}>
+          <div style={{fontSize:22,fontWeight:900,color:ahead?"#16a34a":"#dc2626",lineHeight:1}}>{ahead?"+":""}{fmtMoney(net)}</div>
+          <div style={{fontSize:11,fontWeight:700,color:ahead?"#16a34a":"#dc2626",marginTop:4,textTransform:"uppercase",letterSpacing:"0.05em"}}>Net Position</div>
+          <div style={{fontSize:11,color:"#94a3b8",marginTop:3}}>{ahead?"You're ahead! 🎉":"In the hole"}</div>
+        </div>
+        <div style={{background:projN>=0?"#eff6ff":"#fff7ed",border:`1.5px solid ${projN>=0?"#bfdbfe":"#fdba74"}`,borderRadius:16,padding:16}}>
+          <div style={{fontSize:22,fontWeight:900,color:projN>=0?"#1d4ed8":"#ea580c",lineHeight:1}}>{projN>=0?"+":""}{fmtMoney(projN)}</div>
+          <div style={{fontSize:11,fontWeight:700,color:projN>=0?"#1d4ed8":"#ea580c",marginTop:4,textTransform:"uppercase",letterSpacing:"0.05em"}}>If Pipeline Closes</div>
+          <div style={{fontSize:11,color:"#94a3b8",marginTop:3}}>+{fmtMoney(projE)} potential</div>
+        </div>
+      </div>
+      {bkIdx>-1&&<div style={{background:"#f0fdf4",border:"1.5px solid #86efac",borderRadius:14,padding:"14px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:12}}><span style={{fontSize:26}}>🎯</span><div><div style={{fontWeight:800,color:"#14532d",fontSize:15}}>Break-even at {chart[bkIdx]?.period} · {fmtDate(chart[bkIdx]?.date)}</div><div style={{fontSize:12,color:"#16a34a",marginTop:2}}>Keep closing!</div></div></div>}
+      {!ahead&&bkIdx===-1&&<div style={{background:"#fff7ed",border:"1.5px solid #fdba74",borderRadius:14,padding:"14px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:12}}><span style={{fontSize:26}}>💡</span><div><div style={{fontWeight:800,color:"#9a3412",fontSize:15}}>Need {fmtMoney(Math.abs(net))} more to break even</div><div style={{fontSize:12,color:"#ea580c",marginTop:2}}>Pipeline potential: {fmtMoney(projE)}</div></div></div>}
+      <div style={{background:"#fff",borderRadius:16,border:"1.5px solid #e8ecf0",padding:18,marginBottom:16}}>
+        <div style={{fontWeight:800,fontSize:15,color:"#0f172a",marginBottom:4}}>Draw vs. Earned Over Time</div>
+        <div style={{fontSize:12,color:"#94a3b8",marginBottom:16}}>Green crossing blue = you're in the money 💰</div>
+        <PayChart data={chart}/>
+      </div>
+      {paid.length>0&&(
+        <div style={{background:"#fff",borderRadius:16,border:"1.5px solid #e8ecf0",padding:18}}>
+          <div style={{fontWeight:800,fontSize:15,color:"#0f172a",marginBottom:14}}>Commission Breakdown</div>
+          {paid.map(c=>(
+            <div key={c.id} style={{background:"#f8fafc",borderRadius:12,padding:"12px 14px",border:"1px solid #f1f5f9",marginBottom:8}}>
+              <div style={{fontWeight:700,fontSize:14,color:"#0f172a",marginBottom:3}}>{c.name}</div>
+              <div style={{fontSize:13,color:"#64748b"}}>Job: {fmtMoney(c.jobTotal)}</div>
+              <div style={{fontSize:14,fontWeight:700,color:"#16a34a",marginTop:2}}>Commission: {fmtMoney(Number(c.jobTotal)*rate)}</div>
+              <div style={{fontSize:12,color:"#94a3b8",marginTop:2}}>Paid {fmtDate(c.statusSince)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Map Tab ───────────────────────────────────────────────────────────────────
+function MapTab({customers,status,setStatus}) {
+  const mapDiv=useRef(null), mapObj=useRef(null), markers=useRef([]);
+  const [coords,setCoords]=useState(()=>{ try{ return JSON.parse(localStorage.getItem("geocode_v1")||"{}"); }catch{ return {}; } });
+  const [prog,setProg]=useState({active:false,done:0,total:0,cur:""});
+
+  // Init map
+  useEffect(()=>{
+    if(!mapDiv.current||mapObj.current||typeof L==="undefined") return;
+    const m=L.map(mapDiv.current,{tap:true,zoomControl:true,attributionControl:false}).setView([35.385,-94.398],11);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19}).addTo(m);
+    L.control.attribution({prefix:false}).addAttribution("© OpenStreetMap").addTo(m);
+    mapObj.current=m;
+    setTimeout(()=>m.invalidateSize(),100);
+    return ()=>{ if(mapObj.current){mapObj.current.remove();mapObj.current=null;} };
+  },[]);
+
+  // Filter
+  const filtered=customers.filter(c=>{
+    if(!c.address) return false;
+    if(status==="all") return true;
+    if(status==="due") return isOverdue(c);
+    return c.status===status;
+  });
+
+  // Geocode missing
+  useEffect(()=>{
+    let cancelled=false;
+    const needs=filtered.filter(c=>!(c.address in coords));
+    if(needs.length===0){ setProg({active:false,done:0,total:0,cur:""}); return; }
+    (async()=>{
+      setProg({active:true,done:0,total:needs.length,cur:""});
+      const updated={...coords};
+      for(let i=0;i<needs.length;i++){
+        if(cancelled) break;
+        const c=needs[i];
+        setProg({active:true,done:i,total:needs.length,cur:c.name});
+        try{
+          const res=await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(c.address)}&format=json&limit=1`);
+          const data=await res.json();
+          updated[c.address]=(data&&data.length>0)?{lat:parseFloat(data[0].lat),lng:parseFloat(data[0].lon)}:false;
+          try{ localStorage.setItem("geocode_v1",JSON.stringify(updated)); }catch{}
+        }catch(e){}
+        if(i<needs.length-1) await new Promise(r=>setTimeout(r,1100));
+      }
+      if(!cancelled){ setCoords(updated); setProg({active:false,done:0,total:0,cur:""}); }
+    })();
+    return ()=>{ cancelled=true; };
+  },[customers,status]);
+
+  // Render markers
+  useEffect(()=>{
+    const m=mapObj.current; if(!m) return;
+    markers.current.forEach(mk=>m.removeLayer(mk));
+    markers.current=[];
+    const pts=[];
+    filtered.forEach(c=>{
+      const co=coords[c.address];
+      if(!co||co===false) return;
+      const s=STATUS[c.status];
+      const r=c.jobTotal?Math.min(20,7+Math.sqrt(Number(c.jobTotal)/200)):7;
+      const mk=L.circleMarker([co.lat,co.lng],{radius:r,fillColor:s.bar,color:"#fff",weight:2,fillOpacity:0.88}).addTo(m);
+      mk.bindPopup(`<div style="min-width:200px"><div style="font-weight:700;font-size:15px;color:#0f172a;margin-bottom:6px">${c.name}</div><div style="background:${s.pill.bg};color:${s.pill.text};border:1px solid ${s.pill.border};display:inline-block;padding:3px 9px;border-radius:99px;font-size:11px;font-weight:600;margin-bottom:8px">${s.emoji} ${s.label}</div><div style="font-size:12px;color:#64748b;line-height:1.4;margin-bottom:6px">${c.address}</div>${c.jobTotal?`<div style="font-size:14px;font-weight:700;color:#16a34a;margin-bottom:6px">${fmtMoney(c.jobTotal)}</div>`:""}${c.phone?`<div style="font-size:12px;color:#64748b;margin-bottom:6px">📞 ${c.phone}</div>`:""}<a href="https://maps.apple.com/?q=${encodeURIComponent(c.address)}" style="font-size:12px;color:#2563eb;font-weight:600;display:block;margin-top:4px">📍 Open in Maps →</a></div>`);
+      markers.current.push(mk);
+      pts.push([co.lat,co.lng]);
+    });
+    if(pts.length>0) m.fitBounds(L.latLngBounds(pts),{padding:[50,50],maxZoom:13});
+  },[coords,customers,status]);
+
+  const totalVal=filtered.reduce((s,c)=>s+Number(c.jobTotal||0),0);
+  const mapped=filtered.filter(c=>coords[c.address]&&coords[c.address]!==false).length;
+  const notFound=filtered.filter(c=>coords[c.address]===false).length;
+
+  const FILTERS=[
+    {id:"all",label:"All"},
+    {id:"due",label:"🔥 Due"},
+    {id:"invoiced_overdue",label:"⚠️ Invoiced"},
+    {id:"prospect_stalled",label:"🔴 Stalled"},
+    {id:"prospect_active",label:"🟡 Active"},
+    {id:"approved",label:"✅ Approved"},
+    {id:"completed",label:"🏁 Paid"},
+  ];
+
+  return (
+    <div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:12}}>
+        <SCard label="Jobs" value={filtered.length} bg="#eff6ff" color="#1d4ed8" border="#bfdbfe"/>
+        <SCard label="Mapped" value={mapped} bg="#f0fdf4" color="#16a34a" border="#86efac"/>
+        <SCard label="Value" value={fmtMoney(totalVal)} bg="#fffbeb" color="#d97706" border="#fcd34d"/>
+      </div>
+      <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:10,marginBottom:10}}>
+        {FILTERS.map(f=><button key={f.id} onClick={()=>setStatus(f.id)} style={{flexShrink:0,background:status===f.id?"#1d1d1f":"#fff",color:status===f.id?"#fff":"#64748b",border:status===f.id?"none":"1.5px solid #e5e7eb",borderRadius:99,padding:"7px 14px",fontSize:13,fontWeight:600,cursor:"pointer"}}>{f.label}</button>)}
+      </div>
+      {prog.active&&(
+        <div style={{background:"#eff6ff",border:"1.5px solid #bfdbfe",borderRadius:12,padding:"12px 14px",marginBottom:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6,fontSize:13}}>
+            <span style={{fontWeight:600,color:"#1d4ed8"}}>📍 Locating addresses...</span>
+            <span style={{color:"#64748b",fontSize:12}}>{prog.done}/{prog.total}</span>
+          </div>
+          <div style={{background:"#dbeafe",borderRadius:99,height:6,overflow:"hidden"}}>
+            <div style={{background:"#2563eb",height:"100%",width:`${(prog.done/prog.total)*100}%`,transition:"width 0.3s"}}/>
+          </div>
+          {prog.cur&&<div style={{fontSize:11,color:"#64748b",marginTop:6}}>Looking up: {prog.cur}</div>}
+          <div style={{fontSize:11,color:"#94a3b8",marginTop:6,fontStyle:"italic"}}>First load is slow (~1 sec each), but locations cache permanently.</div>
+        </div>
+      )}
+      <div ref={mapDiv} style={{height:"58vh",minHeight:380,borderRadius:16,border:"1.5px solid #e8ecf0",overflow:"hidden",background:"#e2e8f0"}}/>
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",justifyContent:"center",marginTop:14,fontSize:11}}>
+        {Object.entries(STATUS).map(([k,s])=>(
+          <span key={k} style={{display:"inline-flex",alignItems:"center",gap:5,color:"#64748b"}}>
+            <span style={{width:10,height:10,borderRadius:99,background:s.bar,display:"inline-block",boxShadow:"0 0 0 2px #fff,0 0 0 3px #e5e7eb"}}/>
+            {s.short}
+          </span>
+        ))}
+      </div>
+      <div style={{fontSize:11,color:"#94a3b8",textAlign:"center",marginTop:8}}>Pin size shows job value · {notFound>0?`${notFound} address${notFound!==1?"es":""} couldn't be located`:"Tap a pin for details"}</div>
+    </div>
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+function App() {
+  const [customers,setCustomers]=useState([]);
+  const [pay,setPay]=useState(DEF_PAY);
+  const [loading,setLoading]=useState(true);
+  const [tab,setTab]=useState("pipeline");
+  const [filter,setFilter]=useState("all");
+  const [mapFilter,setMapFilter]=useState("all");
+  const [detail,setDetail]=useState(null);
+  const [modal,setModal]=useState(null);
+  const [form,setForm]=useState(emptyForm());
+  const [logData,setLogData]=useState({date:todayStr(),note:""});
+  const [logTarget,setLogTarget]=useState(null);
+
+  useEffect(()=>{
+    const cs=lsGet("pipeline_v2"); if(cs) setCustomers(cs);
+    const ps=lsGet("pay_settings_v1"); if(ps) setPay({...DEF_PAY,...ps});
+    setLoading(false);
+  },[]);
+
+  const saveC=u=>{setCustomers(u);lsSet("pipeline_v2",u);};
+  const saveP=u=>{setPay(u);lsSet("pay_settings_v1",u);};
+
+  const dueCount=customers.filter(isOverdue).length;
+  const counts=Object.fromEntries(Object.keys(STATUS).map(s=>[s,customers.filter(c=>c.status===s).length]));
+  const filtered=[...customers].filter(c=>{ if(filter==="due") return isOverdue(c); if(filter==="all") return true; return c.status===filter; }).sort((a,b)=>{ const ua=STATUS[a.status]?.urgency??0,ub=STATUS[b.status]?.urgency??0; if(ua!==ub) return ub-ua; return (getNextCall(a)||"9999").localeCompare(getNextCall(b)||"9999"); });
+
+  const openAdd=()=>{setForm(emptyForm());setModal("add");};
+  const openEdit=c=>{setForm({...c,intervalOverride:c.intervalOverride??"",jobTotal:c.jobTotal??""});setDetail(null);setModal("edit");};
+  const openLog=c=>{setLogTarget(c);setLogData({date:todayStr(),note:""});setDetail(null);setModal("logcall");};
+  const updateForm=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const updatePay=(k,v)=>saveP({...pay,[k]:v});
+
+  const handleSave=()=>{
+    const isE=modal==="edit";
+    const id=isE?(form.id||detail?.id):newId();
+    const prev=isE?customers.find(c=>c.id===id):null;
+    const statusSince=(prev&&prev.status!==form.status)?todayStr():(form.statusSince||todayStr());
+    const up={...form,id,statusSince,jobTotal:form.jobTotal?Number(form.jobTotal):null,intervalOverride:form.intervalOverride?Number(form.intervalOverride):null,notes:form.notes||[],createdAt:isE?prev?.createdAt:todayStr()};
+    saveC(isE?customers.map(c=>c.id===id?up:c):[...customers,up]);
+    setModal(null);
+  };
+
+  const handleLog=()=>{
+    if(!logTarget) return;
+    const note={date:logData.date,text:`📞 ${logData.note||"Called — no notes"}`,type:"call"};
+    saveC(customers.map(c=>c.id!==logTarget.id?c:{...c,lastCallDate:logData.date,notes:[note,...(c.notes||[])]}));
+    setModal(null);
+  };
+
+  const handleAddNote=(id,text)=>{
+    const note={date:todayStr(),text,type:"note"};
+    const up=customers.map(c=>c.id!==id?c:{...c,notes:[note,...(c.notes||[])]});
+    saveC(up);
+    // update detail if open
+    const found=up.find(c=>c.id===id);
+    if(found&&detail?.id===id) setDetail(found);
+  };
+
+  const handleStatusChange=(id,status)=>{
+    const up=customers.map(c=>c.id!==id?c:{...c,status,statusSince:todayStr()});
+    saveC(up);
+    const found=up.find(c=>c.id===id);
+    if(found&&detail?.id===id) setDetail(found);
+  };
+
+  const handleDelete=id=>{
+    saveC(customers.filter(c=>c.id!==id));
+    setDetail(null);
+  };
+
+  const TABS=[
+    {id:"pipeline",label:"Pipeline",icon:"📋"},
+    {id:"map",label:"Map",icon:"🗺️"},
+    {id:"dashboard",label:"Dashboard",icon:"📊"},
+    {id:"pay",label:"Pay",icon:"💰"},
+  ];
+  const FTABS=[
+    {id:"all",label:"All",count:customers.length},
+    {id:"due",label:"🔥 Due",count:dueCount},
+    {id:"invoiced_overdue",label:"⚠️ Invoiced",count:counts.invoiced_overdue},
+    {id:"prospect_stalled",label:"🔴 Stalled",count:counts.prospect_stalled},
+    {id:"prospect_active",label:"🟡 Active",count:counts.prospect_active},
+    {id:"approved",label:"✅ Approved",count:counts.approved},
+    {id:"completed",label:"🏁 Done",count:counts.completed},
+  ];
+
+  if(loading) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f8fafc"}}><div style={{color:"#94a3b8"}}>Loading...</div></div>;
+
+  const headerH=56, navH=60;
+  const safeTop="env(safe-area-inset-top)";
+  const safeBot="env(safe-area-inset-bottom)";
+
+  return (
+    <div style={{height:"100%",display:"flex",flexDirection:"column"}}>
+      {/* Modals */}
+      {(modal==="add"||modal==="edit")&&<FormModal mode={modal} form={form} onChange={updateForm} onSave={handleSave} onClose={()=>setModal(null)}/>}
+      {modal==="logcall"&&<LogCallModal customerName={logTarget?.name||""} data={logData} onChange={(k,v)=>setLogData(d=>({...d,[k]:v}))} onSave={handleLog} onClose={()=>setModal(null)}/>}
+      {modal==="sync"&&<SyncModal customers={customers} onClose={()=>setModal(null)}/>}
+      {detail&&<DetailSheet c={detail} onEdit={openEdit} onLogCall={openLog} onAddNote={handleAddNote} onStatusChange={handleStatusChange} onClose={()=>setDetail(null)} onDelete={id=>{handleDelete(id);}}/>}
+
+      {/* Header */}
+      <div style={{background:"#fff",borderBottom:"1px solid #e8ecf0",paddingTop:`calc(${safeTop} + 10px)`,paddingBottom:10,paddingLeft:16,paddingRight:16,position:"sticky",top:0,zIndex:40,flexShrink:0}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div>
+            <div style={{fontSize:18,fontWeight:900,color:"#0f172a",letterSpacing:"-0.02em"}}>🏠 Sales Pipeline</div>
+            <div style={{fontSize:12,color:"#94a3b8",marginTop:1}}>{customers.length} customers · {dueCount>0?<span style={{color:"#dc2626",fontWeight:700}}>{dueCount} overdue</span>:"on schedule"}</div>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            {tab==="pipeline"&&<button onClick={()=>setModal("sync")} style={{background:"#f1f5f9",border:"none",borderRadius:10,padding:"8px 12px",fontSize:13,fontWeight:600,color:"#374151",cursor:"pointer"}}>📅</button>}
+            {tab==="pipeline"&&<button onClick={()=>exportCSV(customers)} style={{background:"#f1f5f9",border:"none",borderRadius:10,padding:"8px 12px",fontSize:13,fontWeight:600,color:"#374151",cursor:"pointer"}}>⬇</button>}
+            <button onClick={openAdd} style={{background:"#1d1d1f",border:"none",borderRadius:10,padding:"8px 14px",fontSize:13,fontWeight:700,color:"#fff",cursor:"pointer"}}>+ Add</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="scroll" style={{flex:1,padding:16,paddingBottom:`calc(${navH}px + ${safeBot} + 16px)`}}>
+        {tab==="pipeline"&&(
+          <>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+              {[{label:"Due Now",val:dueCount,bg:"#fff1f2",color:"#dc2626",border:"#fca5a5"},{label:"Invoiced",val:counts.invoiced_overdue,bg:"#fff7ed",color:"#ea580c",border:"#fdba74"},{label:"Stalled",val:counts.prospect_stalled,bg:"#fee2e2",color:"#dc2626",border:"#fca5a5"},{label:"Active",val:counts.prospect_active,bg:"#fffbeb",color:"#d97706",border:"#fcd34d"}].map(({label,val,bg,color,border})=>(
+                <div key={label} style={{background:bg,border:`1.5px solid ${border}`,borderRadius:14,padding:"12px 16px"}}>
+                  <div style={{fontSize:24,fontWeight:900,color,lineHeight:1}}>{val}</div>
+                  <div style={{fontSize:11,fontWeight:700,color,marginTop:4,textTransform:"uppercase",letterSpacing:"0.05em"}}>{label}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:10,marginBottom:12}}>
+              {FTABS.map(t=><button key={t.id} onClick={()=>setFilter(t.id)} style={{flexShrink:0,background:filter===t.id?"#1d1d1f":"#fff",color:filter===t.id?"#fff":"#64748b",border:filter===t.id?"none":"1.5px solid #e5e7eb",borderRadius:99,padding:"7px 14px",fontSize:13,fontWeight:600,cursor:"pointer"}}>{t.label}{t.count>0?` (${t.count})`:""}</button>)}
+            </div>
+            {filtered.length===0
+              ?<div style={{textAlign:"center",padding:"60px 0",color:"#94a3b8"}}><div style={{fontSize:40,marginBottom:12}}>📋</div><div style={{fontSize:15,fontWeight:600}}>{customers.length===0?"Add your first customer!":"No customers match this filter"}</div></div>
+              :filtered.map(c=><CustomerCard key={c.id} c={c} onSelect={setDetail} onLogCall={openLog}/>)
+            }
+          </>
+        )}
+        {tab==="map"&&<MapTab customers={customers} status={mapFilter} setStatus={setMapFilter}/>}
+        {tab==="dashboard"&&<DashboardTab customers={customers}/>}
+        {tab==="pay"&&<PayTrackerTab customers={customers} pay={pay} onPayChange={updatePay}/>}
+      </div>
+
+      {/* Bottom Navigation */}
+      <div style={{background:"#fff",borderTop:"1px solid #e8ecf0",paddingBottom:`calc(${safeBot})`,paddingTop:0,display:"flex",position:"fixed",bottom:0,left:0,right:0,zIndex:50}}>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{flex:1,background:"none",border:"none",padding:"12px 0 10px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+            <span style={{fontSize:22}}>{t.icon}</span>
+            <span style={{fontSize:10,fontWeight:tab===t.id?700:500,color:tab===t.id?"#1d1d1f":"#94a3b8",letterSpacing:"0.02em"}}>{t.label}</span>
+            {tab===t.id&&<div style={{width:4,height:4,background:"#1d1d1f",borderRadius:99,marginTop:1}}/>}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
